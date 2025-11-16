@@ -1,0 +1,9 @@
+# .gitignore içeriği
+# Sanal ortam klasörü
+venv/
+*.pyc
+__pycache__/
+
+# Editör dosyaları
+.vscode/
+.idea/
