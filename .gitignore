@@ -1,9 +1,24 @@
 # .gitignore içeriği
+
 # Sanal ortam klasörü
 venv/
 *.pyc
 __pycache__/
 
-# Editör dosyaları
+# Python Paket ve Cache Dosyaları
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Docker ve Volume'ler
+*.log
+volumes/
+
+# Hassas Bilgiler
+.env
+.env.*
+
+# Editör ve Araç Dosyaları
 .vscode/
 .idea/
+.dbeaver/
