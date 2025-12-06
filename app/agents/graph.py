@@ -14,7 +14,7 @@ from app.agents.nodes import (
     add_ai_message,
     handle_error
 )
-from app.core.redis import get_checkpointer
+from app.core.redis import get_checkpointer_sync
 
 
 # Type alias for compiled graph
@@ -69,7 +69,7 @@ def get_compiled_graph(with_memory: bool = True) -> CompiledGraph:
     if _compiled_graph is None:
         graph = build_graph()
         if with_memory:
-            checkpointer = get_checkpointer()
+            checkpointer = get_checkpointer_sync()
             _compiled_graph = compile_graph(graph, checkpointer)
         else:
             _compiled_graph = compile_graph(graph)

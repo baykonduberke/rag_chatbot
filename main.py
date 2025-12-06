@@ -24,13 +24,11 @@ async def lifespan(app: FastAPI):
     # ===== STARTUP =====
     print("🚀 Application starting...")
     
-    # Database tablolarını yeniden oluştur (development için)
+    # Database tablolarını oluştur (yoksa)
     async with engine.begin() as conn:
-        # Tabloları sil ve yeniden oluştur
-        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     
-    print("✅ Database tables recreated")
+    print("✅ Database tables ready")
     
     yield
     

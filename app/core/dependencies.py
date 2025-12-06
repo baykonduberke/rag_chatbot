@@ -6,7 +6,7 @@ Dependency Injection pattern ile service ve resource yönetimi.
 
 from typing import Generator, Annotated
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import async_session_maker
@@ -15,8 +15,11 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 
 
-# OAuth2 scheme - Swagger UI ile entegre çalışır
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# HTTPBearer - Swagger UI'da direkt JWT token girişi sağlar
+http_bearer = HTTPBearer(
+    scheme_name="JWT Token",
+    description="JWT token'ı buraya girin (ey... ile başlayan)"
+)
 
 
 async def get_db() -> Generator[AsyncSession, None, None]:
@@ -33,7 +36,7 @@ async def get_db() -> Generator[AsyncSession, None, None]:
 
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ) -> User:
     """Current authenticated user dependency."""
@@ -42,6 +45,9 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    # Token'ı credentials'dan al
+    token = credentials.credentials
     
     payload = decode_access_token(token)
     if payload is None:
