@@ -752,6 +752,21 @@ Her istek → Havuzdan bağlantı al → Sorgu → Havuza geri ver
 ---
 
 ```python
+    # ===== REDIS =====
+    REDIS_URL: str = "redis://localhost:6379/0"
+```
+
+**📝 Açıklama - Redis Ayarları:**
+
+| Ayar | Açıklama |
+|------|----------|
+| `REDIS_URL` | Redis bağlantı adresi (LangGraph checkpointer için) |
+
+**Format:** `redis://[user:password@]host:port/db_number`
+
+---
+
+```python
     # ===== OPENAI =====
     OPENAI_API_KEY: str
     OPENAI_MODEL: str = "gpt-4o"
@@ -1287,6 +1302,8 @@ Mesaj geçmişi Redis'te saklanır (kalıcı).
 """
 
 from typing import Optional, Union
+import redis as sync_redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 import redis.asyncio as redis
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.redis import RedisSaver
@@ -1297,6 +1314,9 @@ from app.core.config import settings
 # Redis client singleton
 _redis_client: Optional[redis.Redis] = None
 
+# Sync Redis client for checkpointer
+_sync_redis_client: Optional[sync_redis.Redis] = None
+
 # Checkpointer singleton
 _checkpointer: Optional[Union[RedisSaver, MemorySaver]] = None
 ```
@@ -1306,8 +1326,9 @@ _checkpointer: Optional[Union[RedisSaver, MemorySaver]] = None
 Singleton, bir sınıftan sadece bir instance olmasını garantiler:
 
 ```python
-_redis_client = None  # Global değişken
-_checkpointer = None  # Global checkpointer
+_redis_client = None       # Async Redis client
+_sync_redis_client = None  # Sync Redis client (test için)
+_checkpointer = None       # LangGraph checkpointer
 
 # İlk çağrıda oluştur, sonrakilerde aynısını döndür
 ```
@@ -1316,7 +1337,7 @@ _checkpointer = None  # Global checkpointer
 
 ```python
 async def get_redis_client() -> redis.Redis:
-    """Redis client singleton."""
+    """Redis client singleton (async)."""
     global _redis_client
     
     if _redis_client is None:
@@ -1346,20 +1367,61 @@ def get_checkpointer_sync() -> Union[RedisSaver, MemorySaver]:
     """
     LangGraph checkpointer (sync version).
     
-    RedisSaver kullanarak mesaj geçmişi Redis'te saklanır.
-    Sunucu yeniden başlasa bile mesajlar kaybolmaz.
+    RedisSaver ile mesaj geçmişi Redis'te kalıcı olarak saklanır.
     """
     global _checkpointer
     
     if _checkpointer is None:
         try:
-            _checkpointer = RedisSaver.from_conn_string(settings.REDIS_URL)
-            print("✅ RedisSaver initialized - Messages will be stored in Redis")
+            # Redis bağlantısını test et
+            test_client = get_sync_redis_client()
+            test_client.ping()
+            print(f"✅ Redis connection successful: {settings.REDIS_URL}")
+            test_client.close()
+            
+            # RedisSaver oluştur - sadece redis_url ile
+            _checkpointer = RedisSaver(redis_url=settings.REDIS_URL)
+            
+            # Gerekli indeksleri oluştur (RediSearch)
+            _checkpointer.setup()
+            print("✅ RedisSaver initialized - Messages will be stored in Redis (persistent)")
+        except RedisConnectionError as e:
+            print(f"❌ Redis connection failed: {e}")
+            print("⚠️ Falling back to MemorySaver - Messages will be lost on restart!")
+            _checkpointer = MemorySaver()
         except Exception as e:
-            print(f"⚠️ RedisSaver failed, falling back to MemorySaver: {e}")
+            print(f"❌ RedisSaver initialization failed: {e}")
+            print("⚠️ Falling back to MemorySaver - Messages will be lost on restart!")
             _checkpointer = MemorySaver()
     
     return _checkpointer
+```
+
+**📝 Açıklama - RedisSaver Akışı:**
+
+```
+get_checkpointer_sync() çağrıldı
+         │
+         ▼
+┌─────────────────────────┐
+│ 1. Redis bağlantı testi │ → ping()
+└──────────┬──────────────┘
+           │ Başarılı
+           ▼
+┌─────────────────────────┐
+│ 2. RedisSaver oluştur   │ → RedisSaver(redis_url=...)
+└──────────┬──────────────┘
+           │
+           ▼
+┌─────────────────────────┐
+│ 3. İndeksleri oluştur   │ → setup()
+│    (RediSearch)         │
+└──────────┬──────────────┘
+           │ Hata oluşursa
+           ▼
+┌─────────────────────────┐
+│ 4. MemorySaver fallback │ → RAM'de sakla
+└─────────────────────────┘
 ```
 
 **📝 Açıklama - RedisSaver vs MemorySaver:**
@@ -1372,6 +1434,7 @@ def get_checkpointer_sync() -> Union[RedisSaver, MemorySaver]:
 │  ✅ Sunucu kapanınca kaybolmaz          │
 │  ✅ Kalıcı (disk'e yazılır)             │
 │  ✅ Birden fazla sunucuda çalışır       │
+│  ⚠️ Redis Stack gerektirir (RedisJSON)  │
 └─────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────┐
@@ -1380,7 +1443,19 @@ def get_checkpointer_sync() -> Union[RedisSaver, MemorySaver]:
 │  ⚠️ Mesajlar RAM'de saklanır            │
 │  ❌ Sunucu kapanınca kaybolur           │
 │  ❌ Sadece tek sunucuda çalışır         │
+│  ✅ Redis gerektirmez                   │
 └─────────────────────────────────────────┘
+```
+
+**📝 Önemli Not - Redis Stack:**
+
+RedisSaver, `JSON.SET` komutu kullanır. Bu komut standart Redis'te yoktur. `redis/redis-stack-server` image'ı kullanılmalıdır:
+
+```yaml
+# docker-compose.yml
+redis:
+  image: redis/redis-stack-server:latest  # ✅ RedisJSON dahil
+  # image: redis:7-alpine                 # ❌ RedisJSON yok
 ```
 
 **📝 Açıklama - Checkpointer:**
@@ -2422,7 +2497,7 @@ from app.agents.nodes import (
     add_ai_message,
     handle_error
 )
-from app.core.redis import get_checkpointer
+from app.core.redis import get_checkpointer_sync
 ```
 
 ---
@@ -2526,7 +2601,7 @@ def get_compiled_graph(with_memory: bool = True) -> CompiledGraph:
     if _compiled_graph is None:
         graph = build_graph()
         if with_memory:
-            checkpointer = get_checkpointer()
+            checkpointer = get_checkpointer_sync()
             _compiled_graph = compile_graph(graph, checkpointer)
         else:
             _compiled_graph = compile_graph(graph)
@@ -2961,12 +3036,13 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack-server:latest  # RedisJSON için Stack kullanıyoruz
     volumes:
       - redis_data:/data
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes
+    environment:
+      - REDIS_ARGS=--appendonly yes  # command yerine environment
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -3015,17 +3091,36 @@ volumes:
    localhost:5432 localhost:6379 localhost:8000
 ```
 
-| Servis | Port | Açıklama |
-|--------|------|----------|
-| `db` | 5432 | PostgreSQL veritabanı |
-| `redis` | 6379 | Redis (mesaj geçmişi) |
-| `web` | 8000 | FastAPI uygulaması |
+| Servis | Image | Port | Açıklama |
+|--------|-------|------|----------|
+| `db` | postgres:16-alpine | 5432 | PostgreSQL veritabanı |
+| `redis` | redis/redis-stack-server:latest | 6379 | Redis Stack (RedisSaver için) |
+| `web` | Build from Dockerfile | 8000 | FastAPI uygulaması |
 
-**Redis komut satırı açıklaması:**
+**⚠️ Neden Redis Stack?**
+
+RedisSaver, `JSON.SET` ve `FT.CREATE` (RediSearch) komutları kullanır. Bu komutlar standart Redis'te yoktur:
+
 ```yaml
-command: redis-server --appendonly yes
+# ❌ YANLIŞ - RedisJSON ve RediSearch yok
+image: redis:7-alpine
+
+# ✅ DOĞRU - Tüm modüller dahil
+image: redis/redis-stack-server:latest
 ```
-`--appendonly yes` parametresi, Redis'in verilerini diske yazmasını sağlar. Bu sayede Redis yeniden başlasa bile mesaj geçmişi kaybolmaz.
+
+**Redis Stack'te dahil modüller:**
+- **RedisJSON** - JSON veri yapıları (`JSON.SET`, `JSON.GET`)
+- **RediSearch** - Full-text arama ve indeksleme (`FT.CREATE`, `FT.SEARCH`)
+- **RedisTimeSeries** - Zaman serisi verileri
+- **RedisBloom** - Bloom filter veri yapıları
+
+**Redis yapılandırması:**
+```yaml
+environment:
+  - REDIS_ARGS=--appendonly yes
+```
+`--appendonly yes` parametresi, Redis'in verilerini diske yazmasını sağlar. Redis Stack'te `command` yerine `REDIS_ARGS` environment variable kullanılır, çünkü Stack kendi başlangıç scriptini çalıştırır.
 
 **depends_on ile healthcheck:**
 ```yaml

@@ -7,6 +7,7 @@ Mesaj geçmişi Redis'te saklanır (kalıcı).
 
 from typing import Optional, Union
 import redis as sync_redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 import redis.asyncio as redis
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.redis import RedisSaver
@@ -56,10 +57,16 @@ async def close_redis() -> None:
     """Redis bağlantısını kapat."""
     global _redis_client, _sync_redis_client, _checkpointer
     
-    # Checkpointer'ı temizle
+    # Checkpointer'ı kapat (RedisSaver ise)
+    if _checkpointer is not None and isinstance(_checkpointer, RedisSaver):
+        try:
+            # RedisSaver kendi bağlantısını yönetir, sadece temizle
+            pass
+        except Exception:
+            pass
     _checkpointer = None
     
-    # Sync Redis client'ı kapat
+    # Sync Redis client'ı kapat (test için kullanılıyordu)
     if _sync_redis_client is not None:
         _sync_redis_client.close()
         _sync_redis_client = None
@@ -84,14 +91,27 @@ def get_checkpointer_sync() -> Union[RedisSaver, MemorySaver]:
     
     if _checkpointer is None:
         try:
-            # Sync Redis client al
-            redis_client = get_sync_redis_client()
+            # Redis bağlantısını test et
+            test_client = get_sync_redis_client()
+            test_client.ping()
+            print(f"✅ Redis connection successful: {settings.REDIS_URL}")
+            test_client.close()
             
-            # RedisSaver oluştur
-            _checkpointer = RedisSaver(redis_client)
-            print("✅ RedisSaver initialized - Messages will be stored in Redis")
+            # RedisSaver oluştur - sadece redis_url ile
+            _checkpointer = RedisSaver(redis_url=settings.REDIS_URL)
+            
+            # Gerekli indeksleri oluştur
+            _checkpointer.setup()
+            print("✅ RedisSaver initialized - Messages will be stored in Redis (persistent)")
+        except RedisConnectionError as e:
+            print(f"❌ Redis connection failed: {e}")
+            print("⚠️ Falling back to MemorySaver - Messages will be lost on restart!")
+            _checkpointer = MemorySaver()
         except Exception as e:
-            print(f"⚠️ RedisSaver failed, falling back to MemorySaver: {e}")
+            print(f"❌ RedisSaver initialization failed: {e}")
+            print("⚠️ Falling back to MemorySaver - Messages will be lost on restart!")
+            import traceback
+            traceback.print_exc()
             _checkpointer = MemorySaver()
     
     return _checkpointer

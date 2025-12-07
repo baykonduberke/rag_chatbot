@@ -110,7 +110,7 @@ rag_chatbot/
 | **Web Framework** | FastAPI | 0.121.2 | Modern async Python web framework |
 | **ORM** | SQLAlchemy | 2.0.44 | Async SQLAlchemy ORM |
 | **Veritabanı** | PostgreSQL | 16 | İlişkisel veritabanı |
-| **Cache** | Redis | Latest | LangGraph state cache |
+| **Cache** | Redis Stack | Latest | LangGraph checkpointer (RedisSaver) |
 | **AI Framework** | LangGraph | 1.0.3 | Agent workflow orchestration |
 | **LLM** | OpenAI GPT | GPT-4o | Dil modeli |
 | **LangChain** | langchain-openai | 1.0.3 | OpenAI entegrasyonu |
@@ -199,8 +199,8 @@ pip install -r requirements.txt
 # PostgreSQL veritabanını oluştur
 createdb rag_chatbot
 
-# Redis'i başlat (lokal geliştirme için)
-docker run -d -p 6379:6379 redis:7-alpine
+# Redis Stack'i başlat (lokal geliştirme için)
+docker run -d -p 6379:6379 redis/redis-stack-server:latest
 
 # Uygulamayı başlat
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
@@ -478,6 +478,7 @@ FastAPI dependency'leri.
 **Authentication:**
 ```python
 # HTTPBearer ile direkt JWT token girişi
+from typing import Annotated
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 http_bearer = HTTPBearer(
@@ -486,8 +487,8 @@ http_bearer = HTTPBearer(
 )
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
-    db: AsyncSession = Depends(get_db)
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
+    db: Annotated[AsyncSession, Depends(get_db)]
 ) -> User:
     token = credentials.credentials
     # Token decode ve user getirme...
@@ -519,14 +520,20 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 Redis bağlantısı ve LangGraph checkpointer. Mesaj geçmişi Redis'te kalıcı olarak saklanır.
 
 ```python
-# Redis client
+# Redis client (async)
 await get_redis_client()
 
 # LangGraph checkpointer (RedisSaver - kalıcı)
 checkpointer = get_checkpointer_sync()
 ```
 
-**Not:** RedisSaver kullanılarak mesaj geçmişi Redis'te saklanır. Sunucu yeniden başlasa bile mesajlar kaybolmaz.
+**Özellikler:**
+- **RedisSaver**: LangGraph state'ini Redis'te saklar
+- **Redis Stack**: RedisJSON modülü ile JSON verilerini destekler
+- **setup()**: RediSearch indekslerini otomatik oluşturur
+- **Fallback**: Redis bağlantısı başarısızsa MemorySaver kullanılır
+
+**Not:** Redis Stack image'ı (`redis/redis-stack-server`) kullanılmalıdır. Normal Redis (`redis:alpine`) RedisJSON modülünü içermez.
 
 ---
 
@@ -769,6 +776,26 @@ def build_graph() -> StateGraph:
     graph.add_edge("handle_error", END)
     
     return graph
+
+
+def get_compiled_graph(with_memory: bool = True) -> CompiledGraph:
+    """Compiled graph singleton."""
+    global _compiled_graph
+    
+    if _compiled_graph is None:
+        graph = build_graph()
+        if with_memory:
+            checkpointer = get_checkpointer_sync()
+            _compiled_graph = compile_graph(graph, checkpointer)
+        else:
+            _compiled_graph = compile_graph(graph)
+    
+    return _compiled_graph
+```
+
+**Import'lar:**
+```python
+from app.core.redis import get_checkpointer_sync
 ```
 
 #### prompts.py - System Prompt'ları
@@ -1029,7 +1056,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 | Servis | Image | Port | Açıklama |
 |--------|-------|------|----------|
 | `db` | postgres:16-alpine | 5432 | PostgreSQL veritabanı |
-| `redis` | redis:7-alpine | 6379 | Redis (mesaj geçmişi) |
+| `redis` | redis/redis-stack-server:latest | 6379 | Redis Stack (RedisSaver için RedisJSON) |
 | `web` | Build from Dockerfile | 8000 | FastAPI uygulaması |
 
 ### Komutlar
