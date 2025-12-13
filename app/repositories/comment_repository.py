@@ -21,6 +21,7 @@ class CommentRepository(BaseRepository[Comment]):
         self,
         company: Optional[str] = None, 
         category: Optional[str] = None, 
+        product_category: Optional[str] = None,
         sentiment_result: Optional[str] = None
     ) -> int:
         """Tüm comment'lerin sayısını getir."""
@@ -29,6 +30,8 @@ class CommentRepository(BaseRepository[Comment]):
             query = query.where(Comment.company == company)
         if category:
             query = query.where(Comment.category == category)
+        if product_category:
+            query = query.where(Comment.product_category == product_category)
         if sentiment_result:
             query = query.where(Comment.sentiment_result == sentiment_result)
         result = await self.db.execute(query)
@@ -38,6 +41,7 @@ class CommentRepository(BaseRepository[Comment]):
         self,
         company: Optional[str] = None, 
         category: Optional[str] = None, 
+        product_category: Optional[str] = None,
         sentiment_result: Optional[str] = None,
         limit: int = 10,
         offset: int = 0
@@ -48,6 +52,8 @@ class CommentRepository(BaseRepository[Comment]):
             query = query.where(Comment.company == company)
         if category:
             query = query.where(Comment.category == category)
+        if product_category:
+            query = query.where(Comment.product_category == product_category)
         if sentiment_result:
             query = query.where(Comment.sentiment_result == sentiment_result)
         query = query.order_by(desc(Comment.created_at)).limit(limit).offset(offset)

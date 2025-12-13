@@ -31,6 +31,8 @@ class Comment(Base):
     
     category: Mapped[str] = mapped_column(String(255), nullable=False)
     
+    product_category: Mapped[str] = mapped_column(String(255), nullable=False)
+    
     sentiment_result: Mapped[SentimentType] = mapped_column(
         Enum(SentimentType, native_enum=False, length=50),
         nullable=False

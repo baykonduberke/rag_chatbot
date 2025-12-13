@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.conversation import Conversation
 from app.repositories.conversation_repository import ConversationRepository
 from app.agents.state import AgentState
-from app.agents.graph import get_compiled_graph
+from app.agents.graph import get_compiled_graph_async
 from app.schemas.chat import (
     ChatMessageResponse,
     ConversationSchema,
@@ -26,8 +26,14 @@ class ChatService:
     
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.graph = get_compiled_graph(with_memory=True)
+        self.graph = None  # Lazy initialization
         self.conversation_repo = ConversationRepository(db)
+    
+    async def _get_graph(self):
+        """Graph'ı lazy olarak al."""
+        if self.graph is None:
+            self.graph = await get_compiled_graph_async()
+        return self.graph
     
     async def send_message(
         self,
@@ -36,6 +42,9 @@ class ChatService:
         conversation_id: Optional[str] = None
     ) -> ChatMessageResponse:
         """Mesaj gönder ve cevap al."""
+        
+        # Graph al
+        graph = await self._get_graph()
         
         # Conversation al veya oluştur
         if conversation_id:
@@ -52,8 +61,12 @@ class ChatService:
             thread_id=conversation.id,
             last_question=message,
             last_answer="",
-            context=None,
-            error=None
+            error=None,
+            agent_type=None,
+            sql_query=None,
+            sql_results=None,
+            sql_results_for_rag=None,
+            rag_results=None
         )
         
         # Config: thread_id ile state izole edilir
@@ -63,8 +76,8 @@ class ChatService:
             }
         }
         
-        # Graph invoke et
-        result = self.graph.invoke(initial_state, config)
+        # Graph invoke et (async)
+        result = await graph.ainvoke(initial_state, config)
         
         # Conversation metadata güncelle
         await self._update_conversation_timestamp(conversation)
@@ -91,11 +104,14 @@ class ChatService:
         # Ownership check
         await self._get_conversation(conversation_id, user_id)
         
+        # Graph al
+        graph = await self._get_graph()
+        
         # Graph state'inden mesajları çek
         config = {"configurable": {"thread_id": conversation_id}}
         
         try:
-            state = self.graph.get_state(config)
+            state = await graph.aget_state(config)
             if not state or not state.values:
                 return []
             
@@ -179,4 +195,3 @@ class ChatService:
         """Update last_message_at timestamp."""
         conversation.last_message_at = datetime.now()
         await self.conversation_repo.update(conversation)
-

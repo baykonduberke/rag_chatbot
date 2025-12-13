@@ -77,22 +77,22 @@ async def login(
     return Token(access_token=access_token, token_type="bearer")
 
 
-@router.get(
-    "/me",
-    response_model=UserOut,
-    summary="Get current user",
-    description="Get current authenticated user info"
-)
-async def get_me(
-    db: AsyncSession = Depends(get_db),
-    # Not: Bu endpoint için get_current_user dependency'si kullanılacak
-    # Ama circular import sorununu önlemek için basit tutuyoruz
-) -> UserOut:
-    """Mevcut kullanıcı bilgilerini getir."""
-    # Bu endpoint'i kullanmak için frontend token gönderecek
-    # ve get_current_user dependency'si ile user alınacak
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Use /api/v1/users/me endpoint instead"
-    )
+# @router.get(
+#     "/me",
+#     response_model=UserOut,
+#     summary="Get current user",
+#     description="Get current authenticated user info"
+# )
+# async def get_me(
+#     db: AsyncSession = Depends(get_db),
+#     # Not: Bu endpoint için get_current_user dependency'si kullanılacak
+#     # Ama circular import sorununu önlemek için basit tutuyoruz
+# ) -> UserOut:
+#     """Mevcut kullanıcı bilgilerini getir."""
+#     # Bu endpoint'i kullanmak için frontend token gönderecek
+#     # ve get_current_user dependency'si ile user alınacak
+#     raise HTTPException(
+#         status_code=status.HTTP_501_NOT_IMPLEMENTED,
+#         detail="Use /api/v1/users/me endpoint instead"
+#     )
 

@@ -41,11 +41,11 @@ class ConversationRepository(BaseRepository[Conversation]):
         )
         return list(result.scalars().all())
     
-    async def count_by_user(self, user_id: int) -> int:
-        """Kullanıcının conversation sayısını getir."""
-        result = await self.db.execute(
-            select(Conversation.id)
-            .where(Conversation.user_id == user_id)
-        )
-        return len(result.scalars().all())
+    # async def count_by_user(self, user_id: int) -> int:
+    #     """Kullanıcının conversation sayısını getir."""
+    #     result = await self.db.execute(
+    #         select(Conversation.id)
+    #         .where(Conversation.user_id == user_id)
+    #     )
+    #     return len(result.scalars().all())
 
