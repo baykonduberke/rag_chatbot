@@ -1,13 +1,15 @@
 # RAG Chatbot API
 
-LangGraph tabanlı, FastAPI ile geliştirilmiş modern bir yapay zeka sohbet uygulaması.
+LangGraph tabanlı, FastAPI ile geliştirilmiş akıllı yorum analizi ve sohbet uygulaması. Semantic search (RAG) ile yorum içeriklerini analiz eder, SQL sorgularıyla istatistiksel veriler sunar.
 
 ## 📑 İçindekiler
 
 - [Proje Hakkında](#-proje-hakkında)
+- [Özellikler](#-özellikler)
 - [Mimari Yapı](#-mimari-yapı)
 - [Teknolojiler](#-teknolojiler)
 - [Kurulum](#-kurulum)
+- [Veri Yükleme](#-veri-yükleme)
 - [API Referansı](#-api-referansı)
 - [Modüller](#-modüller)
 - [Veritabanı Şeması](#-veritabanı-şeması)
@@ -19,12 +21,31 @@ LangGraph tabanlı, FastAPI ile geliştirilmiş modern bir yapay zeka sohbet uyg
 
 ## 🎯 Proje Hakkında
 
-Bu proje, kullanıcıların yapay zeka ile sohbet edebileceği bir REST API sunar. Temel özellikleri:
+Bu proje, kullanıcı yorumlarını (reviews) analiz eden ve yapay zeka destekli sohbet arayüzü sunan bir REST API'dir.
 
+**Temel Kullanım Senaryoları:**
+- 📊 **İstatistiksel Sorgular**: "Kaç olumsuz yorum var?", "Nike'ın olumlu yorum oranı nedir?"
+- 🔍 **Semantic Search**: "Kargo gecikmelerinden şikayet eden yorumları bul"
+- 💬 **İçerik Analizi**: "Olumsuz yorumlarda müşteriler neyden şikayet ediyor?"
+- 🗂️ **Yorum Yönetimi**: CRUD işlemleri ile yorum ekleme, güncelleme, silme
+
+---
+
+## ✨ Özellikler
+
+### 🤖 Akıllı Soru Yönlendirme (3-Yönlü Router)
+| Mod | Kullanım | Örnek |
+|-----|----------|-------|
+| **chitchat** | Genel sohbet | "Merhaba", "Nasılsın?" |
+| **sql_only** | Sayısal sorgular | "Kaç yorum var?", "En fazla yorum alan kategori?" |
+| **sql_then_rag** | İçerik analizi | "Şikayet konularını özetle", "Hakaret içeren yorumlar" |
+
+### 📦 Temel Özellikler
 - **Kullanıcı Yönetimi**: Kayıt, giriş ve JWT tabanlı kimlik doğrulama
 - **Sohbet Sistemi**: Kullanıcı başına izole edilmiş sohbet oturumları
-- **Hafıza Yönetimi**: LangGraph checkpointer ile konuşma geçmişi
-- **RAG Desteği**: Retrieval-Augmented Generation altyapısı (genişletilebilir)
+- **Hafıza Yönetimi**: Redis AsyncRedisSaver ile konuşma geçmişi
+- **RAG Desteği**: Redis Vector Store ile semantic search
+- **Yorum Analizi**: Sentiment analizi (Olumlu/Olumsuz) 
 - **Async Mimari**: Tam asenkron veritabanı ve HTTP işlemleri
 
 ---
@@ -37,13 +58,19 @@ rag_chatbot/
 ├── requirements.txt            # Python bağımlılıkları
 ├── Dockerfile                  # Docker image tanımı
 ├── docker-compose.yml          # Docker compose (app + postgres + redis)
+├── alembic.ini                 # Alembic konfigürasyonu
+├── load_comments.py            # Excel'den yorum yükleme scripti
+├── create_embeddings.py        # Embedding oluşturma scripti
+│
+├── alembic/                    # Database migrations
+│   └── versions/               # Migration dosyaları
 │
 └── app/
     ├── __init__.py
     │
     ├── agents/                 # LangGraph agent modülü
     │   ├── graph.py            # Graph builder ve compiler
-    │   ├── nodes.py            # Graph node fonksiyonları
+    │   ├── nodes.py            # Graph node fonksiyonları (8 node)
     │   ├── prompts.py          # System prompt'ları
     │   └── state.py            # Agent state tanımı
     │
@@ -51,7 +78,8 @@ rag_chatbot/
     │   ├── router.py           # Ana router
     │   └── routes/
     │       ├── auth.py         # Kimlik doğrulama endpoint'leri
-    │       └── chat.py         # Sohbet endpoint'leri
+    │       ├── chat.py         # Sohbet endpoint'leri
+    │       └── comments.py     # Yorum CRUD endpoint'leri
     │
     ├── core/                   # Temel yapılandırmalar
     │   ├── config.py           # Ortam değişkenleri
@@ -65,40 +93,45 @@ rag_chatbot/
     │
     ├── models/                 # SQLAlchemy ORM modelleri
     │   ├── user.py             # User modeli
-    │   └── conversation.py     # Conversation modeli
+    │   ├── conversation.py     # Conversation modeli
+    │   └── comment.py          # Comment modeli (sentiment analizi)
     │
     ├── repositories/           # Veritabanı işlemleri
     │   ├── base.py             # Generic CRUD repository
     │   ├── user_repository.py  # User CRUD işlemleri
-    │   └── conversation_repository.py  # Conversation CRUD
+    │   ├── conversation_repository.py  # Conversation CRUD
+    │   └── comment_repository.py       # Comment CRUD
     │
     ├── schemas/                # Pydantic şemaları
     │   ├── user.py             # User request/response
-    │   └── chat.py             # Chat request/response
+    │   ├── chat.py             # Chat request/response
+    │   └── comment.py          # Comment request/response
     │
     └── services/               # Business logic katmanı
-        └── chat_service.py     # Sohbet iş mantığı
+        ├── chat_service.py     # Sohbet iş mantığı
+        └── vector_store.py     # Redis Vector Store (RAG)
 ```
 
 ### Katmanlı Mimari
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    API Layer (Routes)                    │
-│         HTTP Request/Response işlemleri                  │
-├─────────────────────────────────────────────────────────┤
-│                  Service Layer                           │
-│         Business logic ve orchestration                  │
-├─────────────────────────────────────────────────────────┤
-│                Repository Layer                          │
-│         Veritabanı CRUD işlemleri                        │
-├─────────────────────────────────────────────────────────┤
-│                  Model Layer                             │
-│         SQLAlchemy ORM modelleri                         │
-├─────────────────────────────────────────────────────────┤
-│                 Agent Layer (LangGraph)                  │
-│         AI sohbet akışı ve state yönetimi               │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    API Layer (Routes)                        │
+│         auth.py | chat.py | comments.py                      │
+├─────────────────────────────────────────────────────────────┤
+│                  Service Layer                               │
+│         chat_service.py | vector_store.py                    │
+├─────────────────────────────────────────────────────────────┤
+│                Repository Layer                              │
+│         user_repository | conversation_repository            │
+│         comment_repository                                   │
+├─────────────────────────────────────────────────────────────┤
+│                  Model Layer                                 │
+│         User | Conversation | Comment                        │
+├─────────────────────────────────────────────────────────────┤
+│                 Agent Layer (LangGraph)                      │
+│         3-yönlü router → SQL → RAG → Response               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -109,14 +142,18 @@ rag_chatbot/
 |----------|-----------|----------|----------|
 | **Web Framework** | FastAPI | 0.121.2 | Modern async Python web framework |
 | **ORM** | SQLAlchemy | 2.0.44 | Async SQLAlchemy ORM |
+| **Migrations** | Alembic | 1.17.2 | Database migrations |
 | **Veritabanı** | PostgreSQL | 16 | İlişkisel veritabanı |
-| **Cache** | Redis Stack | Latest | LangGraph checkpointer (RedisSaver) |
+| **Cache/Vector** | Redis Stack | Latest | Vector Store + Checkpointer |
 | **AI Framework** | LangGraph | 1.0.3 | Agent workflow orchestration |
 | **LLM** | OpenAI GPT | GPT-4o | Dil modeli |
+| **Embeddings** | OpenAI | text-embedding-3-small | 1536-dim embeddings |
+| **Vector Search** | RedisVL | 0.12.1 | Redis Vector Library |
 | **LangChain** | langchain-openai | 1.0.3 | OpenAI entegrasyonu |
 | **Validasyon** | Pydantic | 2.12.4 | Data validation |
 | **Auth** | python-jose | 3.5.0 | JWT token |
 | **Şifreleme** | passlib + bcrypt | - | Password hashing |
+| **Excel** | pandas | - | Excel dosyası işleme |
 | **Async HTTP** | httpx | 0.28.1 | Async HTTP client |
 
 ---
@@ -127,8 +164,8 @@ rag_chatbot/
 
 - Python 3.13+
 - PostgreSQL 16+
-- Redis 7+
-- Docker & Docker Compose (opsiyonel)
+- Redis Stack 7+ (RedisJSON modülü gerekli)
+- Docker & Docker Compose (önerilen)
 
 ### 1. Ortam Değişkenleri
 
@@ -181,7 +218,24 @@ RATE_LIMIT_PER_MINUTE=60
 LOG_LEVEL=INFO
 ```
 
-### 2. Manuel Kurulum
+### 2. Docker ile Kurulum (Önerilen)
+
+```bash
+# Repository klonla
+git clone <repo-url>
+cd rag_chatbot
+
+# .env dosyasını oluştur (OPENAI_API_KEY ekle)
+cp .env.example .env
+
+# Tüm servisleri başlat (app + postgres + redis)
+docker compose up -d
+
+# Logları takip et
+docker compose logs -f web
+```
+
+### 3. Manuel Kurulum
 
 ```bash
 # Repository klonla
@@ -202,19 +256,48 @@ createdb rag_chatbot
 # Redis Stack'i başlat (lokal geliştirme için)
 docker run -d -p 6379:6379 redis/redis-stack-server:latest
 
+# Database migrations (opsiyonel - uygulama auto-create yapar)
+alembic upgrade head
+
 # Uygulamayı başlat
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 3. Docker ile Kurulum
+---
+
+## 📥 Veri Yükleme
+
+### 1. Excel'den Yorum Yükleme
+
+Yorumları `comments_test.xlsx` dosyasından veritabanına yüklemek için:
 
 ```bash
-# Tüm servisleri başlat (app + postgres + redis)
-docker compose up -d
-
-# Logları takip et
-docker compose logs -f web
+python load_comments.py
 ```
+
+**Excel Formatı:**
+| Kolon | Açıklama |
+|-------|----------|
+| Firma/Marka | Şirket adı (Nike, Adidas vb.) |
+| Ürün Kategorisi | Spor Ayakkabı, Kozmetik, Elektronik vb. |
+| Kategori | Performans, Paketleme, Satıcı, Kargo Hızı |
+| Sentiment | Olumlu/Olumsuz |
+| Yorum Metni | Yorum içeriği |
+
+### 2. Embedding Oluşturma (RAG için)
+
+Semantic search için yorumların embedding'lerini oluşturmak için:
+
+```bash
+python create_embeddings.py
+```
+
+Bu script:
+1. Redis Vector Index oluşturur (`comments_idx`)
+2. Tüm yorumları OpenAI `text-embedding-3-small` modeli ile embedding'e çevirir
+3. Redis'te `comment:{id}` formatında saklar
+
+**Not:** Embedding oluşturma OpenAI API kullanır ve ücretlidir.
 
 ---
 
@@ -226,19 +309,15 @@ Base URL: `http://localhost:8000/api/v1`
 
 #### POST `/auth/signup` - Kullanıcı Kaydı
 
-Yeni kullanıcı oluşturur.
-
-**Request Body:**
 ```json
+// Request
 {
     "email": "user@example.com",
     "password": "securepassword123",
     "full_name": "John Doe"
 }
-```
 
-**Response (201 Created):**
-```json
+// Response (201 Created)
 {
     "id": 1,
     "email": "user@example.com",
@@ -248,32 +327,19 @@ Yeni kullanıcı oluşturur.
 }
 ```
 
-**Olası Hatalar:**
-- `409 Conflict`: Email zaten kayıtlı
-- `422 Unprocessable Entity`: Validasyon hatası
-
----
-
 #### POST `/auth/login` - Giriş
 
-JWT access token alır.
-
-**Request Body (form-data):**
 ```
+// Request (form-data)
 username: user@example.com
 password: securepassword123
-```
 
-**Response (200 OK):**
-```json
+// Response (200 OK)
 {
     "access_token": "eyJhbGciOiJIUzI1NiIs...",
     "token_type": "bearer"
 }
 ```
-
-**Olası Hatalar:**
-- `401 Unauthorized`: Yanlış email veya şifre
 
 ---
 
@@ -284,45 +350,41 @@ password: securepassword123
 
 #### POST `/chat` - Mesaj Gönder
 
-AI'a mesaj gönderir ve yanıt alır.
+AI'a mesaj gönderir. Soru tipine göre otomatik yönlendirme yapılır.
 
-**Request Body:**
 ```json
+// Request
 {
-    "message": "Python nedir?",
+    "message": "Olumsuz yorum sayısı kaç?",
     "conversation_id": null
 }
-```
 
-**Response (200 OK):**
-```json
+// Response (200 OK)
 {
-    "response": "Python, yüksek seviyeli bir programlama dilidir...",
+    "response": "Veritabanında toplam 245 olumsuz yorum bulunmaktadır.",
     "conversation_id": "abc-123-def-456"
 }
 ```
 
-**Notlar:**
-- `conversation_id: null` → Yeni konuşma başlatır
-- `conversation_id: "<id>"` → Mevcut konuşmaya devam eder
+**Örnek Sorular:**
 
----
+| Soru | Yönlendirme | Açıklama |
+|------|-------------|----------|
+| "Merhaba" | chitchat | Genel sohbet |
+| "Kaç yorum var?" | sql_only | SQL COUNT sorgusu |
+| "Nike yorumlarını listele" | sql_only | SQL SELECT sorgusu |
+| "Şikayet konularını özetle" | sql_then_rag | SQL + Semantic search |
+| "Hakaret içeren yorumlar" | sql_then_rag | İçerik analizi |
 
 #### GET `/chat/conversations` - Konuşmaları Listele
 
-Kullanıcının tüm konuşmalarını listeler.
-
-**Query Parameters:**
-- `limit` (int, default: 20): Sayfa başına sonuç
-- `offset` (int, default: 0): Atlama sayısı
-
-**Response (200 OK):**
 ```json
+// Response (200 OK)
 {
     "conversations": [
         {
             "id": "abc-123-def-456",
-            "title": "Python nedir?",
+            "title": "Olumsuz yorum sayısı",
             "created_at": "2025-12-05T10:30:00Z",
             "last_message_at": "2025-12-05T10:35:00Z",
             "message_count": 4
@@ -332,49 +394,72 @@ Kullanıcının tüm konuşmalarını listeler.
 }
 ```
 
----
-
 #### GET `/chat/conversations/{conversation_id}` - Konuşma Geçmişi
-
-Belirli bir konuşmanın mesaj geçmişini getirir.
-
-**Path Parameters:**
-- `conversation_id` (string): Konuşma ID'si
-
-**Query Parameters:**
-- `limit` (int, default: 50): Maksimum mesaj sayısı
-- `offset` (int, default: 0): Atlama sayısı
-
-**Response (200 OK):**
-```json
-{
-    "conversation_id": "abc-123-def-456",
-    "messages": [
-        {
-            "role": "human",
-            "content": "Python nedir?",
-            "timestamp": "2025-12-05T10:30:00Z"
-        },
-        {
-            "role": "assistant",
-            "content": "Python, yüksek seviyeli bir programlama dilidir...",
-            "timestamp": "2025-12-05T10:30:05Z"
-        }
-    ],
-    "has_more": false
-}
-```
-
----
 
 #### DELETE `/chat/conversations/{conversation_id}` - Konuşma Sil
 
-Belirli bir konuşmayı ve tüm mesajlarını siler.
+---
 
-**Response (204 No Content):** Başarılı silme
+### Yorumlar (Comments)
 
-**Olası Hatalar:**
-- `404 Not Found`: Konuşma bulunamadı veya erişim yok
+#### POST `/comments` - Yorum Oluştur
+
+```json
+// Request
+{
+    "content": "Ürün kalitesi çok iyi, teşekkürler!",
+    "company": "Nike",
+    "category": "Performans",
+    "product_category": "Spor Ayakkabı",
+    "sentiment_result": "POSITIVE"
+}
+
+// Response (201 Created)
+{
+    "id": 1,
+    "content": "Ürün kalitesi çok iyi, teşekkürler!",
+    "company": "Nike",
+    "category": "Performans",
+    "product_category": "Spor Ayakkabı",
+    "sentiment_result": "Olumlu",
+    "created_at": "2025-12-05T10:30:00Z",
+    "updated_at": "2025-12-05T10:30:00Z"
+}
+```
+
+#### GET `/comments` - Yorumları Listele
+
+**Query Parameters:**
+- `limit` (int, default: 50): Sayfa başına sonuç
+- `offset` (int, default: 0): Atlama sayısı
+- `company` (string, optional): Şirket filtresi
+- `category` (string, optional): Kategori filtresi
+- `sentiment` (string, optional): POSITIVE veya NEGATIVE
+
+```json
+// Response (200 OK)
+{
+    "comments": [
+        {
+            "id": 1,
+            "content": "Ürün kalitesi çok iyi!",
+            "company": "Nike",
+            "category": "Performans",
+            "product_category": "Spor Ayakkabı",
+            "sentiment_result": "Olumlu",
+            "created_at": "2025-12-05T10:30:00Z",
+            "updated_at": "2025-12-05T10:30:00Z"
+        }
+    ],
+    "total": 150
+}
+```
+
+#### GET `/comments/{comment_id}` - Tek Yorum Getir
+
+#### PUT `/comments/{comment_id}` - Yorum Güncelle
+
+#### DELETE `/comments/{comment_id}` - Yorum Sil
 
 ---
 
@@ -403,315 +488,7 @@ Belirli bir konuşmayı ve tüm mesajlarını siler.
 
 ## 📦 Modüller
 
-### 1. Core Modülü (`app/core/`)
-
-#### config.py - Yapılandırma
-
-Tüm ortam değişkenlerini Pydantic Settings ile yönetir.
-
-```python
-class Settings(BaseSettings):
-    # App
-    APP_NAME: str = "RAG Chatbot"
-    DEBUG: bool = False
-    ENVIRONMENT: str = "development"
-    
-    # Database
-    DATABASE_URL: str
-    DB_POOL_SIZE: int = 5
-    DB_MAX_OVERFLOW: int = 10
-    
-    # Auth
-    SECRET_KEY: str
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    
-    # OpenAI
-    OPENAI_API_KEY: str
-    OPENAI_MODEL: str = "gpt-4o"
-    OPENAI_TEMPERATURE: float = 0.7
-    OPENAI_MAX_TOKENS: int = 2000
-```
-
-**Özellikler:**
-- `.env` dosyasından otomatik okuma
-- Type-safe validasyon
-- `@lru_cache` ile singleton pattern
-
----
-
-#### security.py - Güvenlik
-
-JWT token ve password hashing işlemleri.
-
-**Fonksiyonlar:**
-
-| Fonksiyon | Açıklama |
-|-----------|----------|
-| `verify_password(plain, hashed)` | Şifreyi doğrular |
-| `get_password_hash(password)` | Şifreyi bcrypt ile hashler |
-| `create_access_token(subject, expires_delta)` | JWT token oluşturur |
-| `decode_access_token(token)` | JWT token'ı decode eder |
-
-**Token Payload:**
-```json
-{
-    "sub": "1",          // User ID
-    "exp": 1733400000,   // Expiration timestamp
-    "iat": 1733398200,   // Issued at timestamp
-    "type": "access"     // Token type
-}
-```
-
----
-
-#### dependencies.py - Dependency Injection
-
-FastAPI dependency'leri.
-
-| Dependency | Açıklama |
-|------------|----------|
-| `get_db()` | Async database session |
-| `get_current_user()` | JWT token'dan authenticated user |
-| `get_current_active_superuser()` | Superuser kontrolü |
-
-**Authentication:**
-```python
-# HTTPBearer ile direkt JWT token girişi
-from typing import Annotated
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-http_bearer = HTTPBearer(
-    scheme_name="JWT Token",
-    description="JWT token'ı buraya girin (ey... ile başlayan)"
-)
-
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
-    db: Annotated[AsyncSession, Depends(get_db)]
-) -> User:
-    token = credentials.credentials
-    # Token decode ve user getirme...
-```
-
-**Type Aliases:**
-```python
-DbSession = Annotated[AsyncSession, Depends(get_db)]
-CurrentUser = Annotated[User, Depends(get_current_user)]
-```
-
----
-
-#### exceptions.py - Özel Exception'lar
-
-| Exception | HTTP Status | Kullanım |
-|-----------|-------------|----------|
-| `NotFoundException` | 404 | Kaynak bulunamadı |
-| `AlreadyExistsException` | 409 | Duplicate kayıt |
-| `UnauthorizedException` | 401 | Auth hatası |
-| `ForbiddenException` | 403 | Yetki hatası |
-| `ValidationException` | 422 | Validasyon hatası |
-| `ExternalServiceException` | 502 | Dış servis hatası |
-
----
-
-#### redis.py - Redis Yönetimi
-
-Redis bağlantısı ve LangGraph checkpointer. Mesaj geçmişi Redis'te kalıcı olarak saklanır.
-
-```python
-# Redis client (async)
-await get_redis_client()
-
-# LangGraph checkpointer (RedisSaver - kalıcı)
-checkpointer = get_checkpointer_sync()
-```
-
-**Özellikler:**
-- **RedisSaver**: LangGraph state'ini Redis'te saklar
-- **Redis Stack**: RedisJSON modülü ile JSON verilerini destekler
-- **setup()**: RediSearch indekslerini otomatik oluşturur
-- **Fallback**: Redis bağlantısı başarısızsa MemorySaver kullanılır
-
-**Not:** Redis Stack image'ı (`redis/redis-stack-server`) kullanılmalıdır. Normal Redis (`redis:alpine`) RedisJSON modülünü içermez.
-
----
-
-### 2. Database Modülü (`app/db/`)
-
-#### database.py
-
-SQLAlchemy async engine ve session factory.
-
-```python
-# Engine oluşturma
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_pre_ping=True
-)
-
-# Session factory
-async_session_maker = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False
-)
-
-# Base model
-class Base(DeclarativeBase):
-    pass
-```
-
----
-
-### 3. Models Modülü (`app/models/`)
-
-#### User Model
-
-```python
-class User(Base):
-    __tablename__ = "users"
-    
-    id: Mapped[int]                    # Primary key
-    email: Mapped[str]                 # Unique, indexed
-    hashed_password: Mapped[str]       # Bcrypt hash
-    full_name: Mapped[Optional[str]]   # İsim
-    is_active: Mapped[bool]            # Aktiflik durumu
-    is_superuser: Mapped[bool]         # Admin yetkisi
-    created_at: Mapped[datetime]       # Oluşturulma tarihi
-    updated_at: Mapped[datetime]       # Güncellenme tarihi
-    
-    # Relationships
-    conversations: Mapped[list["Conversation"]]
-```
-
-#### Conversation Model
-
-```python
-class Conversation(Base):
-    __tablename__ = "conversations"
-    
-    id: Mapped[str]                     # UUID primary key
-    user_id: Mapped[int]                # Foreign key → users
-    title: Mapped[Optional[str]]        # Konuşma başlığı
-    summary: Mapped[Optional[str]]      # Özet (RAG için)
-    created_at: Mapped[datetime]        # Oluşturulma
-    last_message_at: Mapped[datetime]   # Son mesaj zamanı
-    
-    # Relationships
-    user: Mapped["User"]
-```
-
----
-
-### 4. Repository Modülü (`app/repositories/`)
-
-Repository pattern ile veritabanı işlemleri soyutlanır.
-
-#### BaseRepository
-
-```python
-class BaseRepository(Generic[ModelType]):
-    async def get_by_id(self, id) -> Optional[ModelType]
-    async def create(self, obj) -> ModelType
-    async def update(self, obj) -> ModelType
-    async def delete(self, obj) -> None
-```
-
-#### UserRepository
-
-```python
-class UserRepository(BaseRepository[User]):
-    async def get_by_id(self, user_id: int) -> Optional[User]
-    async def get_by_email(self, email: str) -> Optional[User]
-    async def exists_by_email(self, email: str) -> bool
-```
-
-#### ConversationRepository
-
-```python
-class ConversationRepository(BaseRepository[Conversation]):
-    async def get_by_id(self, conversation_id: str) -> Optional[Conversation]
-    async def list_by_user(self, user_id, limit, offset) -> list[Conversation]
-    async def count_by_user(self, user_id: int) -> int
-```
-
----
-
-### 5. Schemas Modülü (`app/schemas/`)
-
-Pydantic modelleri API validasyonu ve serialization için.
-
-#### User Schemas
-
-| Schema | Kullanım |
-|--------|----------|
-| `UserCreate` | Kayıt request |
-| `UserUpdate` | Güncelleme request |
-| `UserOut` | Response model |
-| `Token` | Login response |
-| `TokenPayload` | JWT payload |
-
-#### Chat Schemas
-
-| Schema | Kullanım |
-|--------|----------|
-| `ChatMessageRequest` | Mesaj gönderme request |
-| `ChatMessageResponse` | AI yanıtı response |
-| `MessageSchema` | Tek mesaj modeli |
-| `ConversationSchema` | Konuşma metadata |
-| `ConversationListResponse` | Konuşma listesi |
-| `ChatHistoryResponse` | Mesaj geçmişi |
-
----
-
-### 6. Services Modülü (`app/services/`)
-
-#### ChatService
-
-Sohbet business logic'i.
-
-```python
-class ChatService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
-        self.graph = get_compiled_graph(with_memory=True)
-        self.conversation_repo = ConversationRepository(db)
-    
-    async def send_message(
-        self, user_id, message, conversation_id
-    ) -> ChatMessageResponse
-    
-    async def get_conversation_history(
-        self, conversation_id, user_id, limit, offset
-    ) -> list[MessageSchema]
-    
-    async def list_conversations(
-        self, user_id, limit, offset
-    ) -> list[ConversationSchema]
-    
-    async def delete_conversation(
-        self, conversation_id, user_id
-    ) -> None
-```
-
-**`send_message` Akışı:**
-
-```
-1. Conversation al veya oluştur
-2. AgentState hazırla
-3. LangGraph config oluştur (thread_id)
-4. Graph invoke et
-5. Conversation metadata güncelle
-6. Response döndür
-```
-
----
-
-### 7. Agents Modülü (`app/agents/`)
+### 1. Agents Modülü (`app/agents/`)
 
 LangGraph ile AI agent implementasyonu.
 
@@ -719,97 +496,116 @@ LangGraph ile AI agent implementasyonu.
 
 ```python
 class AgentState(TypedDict):
-    # Mesaj geçmişi (LangGraph reducer ile)
+    # Message history
     messages: Annotated[list[HumanMessage | AIMessage], add_messages]
     
     # Identifiers
     user_id: str
     thread_id: str
     
-    # Mevcut tur verileri
+    # Current turn
     last_question: str
     last_answer: str
     
-    # Opsiyonel
-    context: Optional[str]   # RAG context
-    error: Optional[str]     # Hata mesajı
+    # Agent routing
+    agent_type: Optional[Literal["chitchat", "sql_only", "sql_then_rag"]]
+    
+    # SQL fields
+    sql_query: Optional[str]
+    sql_results: Optional[str]
+    sql_results_for_rag: Optional[list[dict]]
+    
+    # RAG fields
+    rag_results: Optional[list[dict]]
+    
+    # Error
+    error: Optional[str]
 ```
 
 #### nodes.py - Graph Node'ları
 
 | Node | Fonksiyon | Açıklama |
 |------|-----------|----------|
-| `add_user_message` | User mesajını state'e ekler | `HumanMessage` oluşturur |
-| `generate_response` | LLM yanıtı üretir | OpenAI API çağrısı |
-| `add_ai_message` | AI yanıtını state'e ekler | `AIMessage` oluşturur |
-| `handle_error` | Hata işleme | Error message döndürür |
-
-**LLM Yapılandırması:**
-```python
-llm = ChatOpenAI(
-    api_key=settings.OPENAI_API_KEY,
-    model=settings.OPENAI_MODEL,        # gpt-4o
-    temperature=settings.OPENAI_TEMPERATURE,  # 0.7
-    max_tokens=settings.OPENAI_MAX_TOKENS     # 2000
-)
-```
-
-#### graph.py - Graph Tanımı
-
-```python
-def build_graph() -> StateGraph:
-    graph = StateGraph(AgentState)
-    
-    # Node'lar
-    graph.add_node("add_user_message", add_user_message)
-    graph.add_node("generate_response", generate_response)
-    graph.add_node("add_ai_message", add_ai_message)
-    graph.add_node("handle_error", handle_error)
-    
-    # Entry point
-    graph.set_entry_point("add_user_message")
-    
-    # Edge'ler
-    graph.add_edge("add_user_message", "generate_response")
-    graph.add_edge("generate_response", "add_ai_message")
-    graph.add_edge("add_ai_message", END)
-    graph.add_edge("handle_error", END)
-    
-    return graph
-
-
-def get_compiled_graph(with_memory: bool = True) -> CompiledGraph:
-    """Compiled graph singleton."""
-    global _compiled_graph
-    
-    if _compiled_graph is None:
-        graph = build_graph()
-        if with_memory:
-            checkpointer = get_checkpointer_sync()
-            _compiled_graph = compile_graph(graph, checkpointer)
-        else:
-            _compiled_graph = compile_graph(graph)
-    
-    return _compiled_graph
-```
-
-**Import'lar:**
-```python
-from app.core.redis import get_checkpointer_sync
-```
+| `add_user_message` | User mesajını state'e ekler | HumanMessage oluşturur |
+| `route_question` | Soruyu sınıflandırır | chitchat/sql_only/sql_then_rag |
+| `chitchat_response` | Basit sohbet cevabı | Genel konuşma |
+| `generate_sql` | SQL sorgusu üretir | PostgreSQL SELECT |
+| `execute_sql` | SQL çalıştırır | Veritabanı sorgusu |
+| `interpret_sql_results` | SQL sonuçlarını yorumlar | Sayısal sonuçlar |
+| `rag_search` | Semantic search yapar | Redis Vector Store |
+| `analyze_rag_results` | RAG sonuçlarını analiz eder | İçerik analizi |
+| `add_ai_message` | AI cevabını state'e ekler | AIMessage oluşturur |
 
 #### prompts.py - System Prompt'ları
 
+| Prompt | Kullanım |
+|--------|----------|
+| `ROUTER_PROMPT` | 3-yönlü soru sınıflandırma |
+| `CHITCHAT_PROMPT` | Basit sohbet |
+| `SQL_GENERATION_PROMPT` | PostgreSQL sorgu üretimi |
+| `SQL_INTERPRETATION_PROMPT` | SQL sonuç yorumlama |
+| `RAG_ANALYSIS_PROMPT` | Semantic search sonuç analizi |
+
+---
+
+### 2. Services Modülü (`app/services/`)
+
+#### vector_store.py - Redis Vector Store
+
 ```python
-SYSTEM_PROMPT = """You are a helpful AI assistant..."""
+# Embedding modeli
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")  # 1536-dim
 
-RAG_CONTEXT_TEMPLATE = """
-Based on the following retrieved information...
-Retrieved Context: {context}
-User Question: {question}
-"""
+# Index şeması
+INDEX_SCHEMA = {
+    "index": {"name": "comments_idx", "prefix": "comment:"},
+    "fields": [
+        {"name": "id", "type": "tag"},
+        {"name": "content", "type": "text"},
+        {"name": "company", "type": "tag"},
+        {"name": "embedding", "type": "vector", "attrs": {"dims": 1536, "algorithm": "flat"}}
+    ]
+}
 
-ERROR_PROMPT = """I apologize, but I encountered an issue..."""
+# Semantic search
+results = await search_similar_comments(
+    query="kargo gecikmesi şikayeti",
+    top_k=20,
+    sentiment_filter="NEGATIVE"  # Opsiyonel
+)
+```
+
+**Fonksiyonlar:**
+
+| Fonksiyon | Açıklama |
+|-----------|----------|
+| `create_index()` | Redis Vector Index oluşturur |
+| `add_comment_embedding()` | Tek yorumu embedding'e çevirir |
+| `search_similar_comments()` | Semantic search yapar |
+| `get_embedding_count()` | Toplam embedding sayısı |
+
+---
+
+### 3. Models Modülü (`app/models/`)
+
+#### Comment Model
+
+```python
+class SentimentType(PyEnum):
+    POSITIVE = "Olumlu"
+    NEGATIVE = "Olumsuz"
+
+class Comment(Base):
+    __tablename__ = "comments"
+    
+    id: Mapped[int]                     # Primary key
+    content: Mapped[str]                # Yorum içeriği (Text)
+    company: Mapped[str]                # Şirket/marka adı
+    category: Mapped[str]               # Yorum kategorisi
+    product_category: Mapped[str]       # Ürün kategorisi
+    sentiment_result: Mapped[SentimentType]  # Olumlu/Olumsuz
+    created_at: Mapped[datetime]        # Oluşturulma tarihi
+    updated_at: Mapped[datetime]        # Güncellenme tarihi
 ```
 
 ---
@@ -831,36 +627,37 @@ ERROR_PROMPT = """I apologize, but I encountered an issue..."""
 │ created_at         │       └────────────────────────┘
 │ updated_at         │
 └────────────────────┘
+
+┌────────────────────────────┐
+│         comments           │
+├────────────────────────────┤
+│ id (PK)                    │
+│ content (TEXT)             │
+│ company                    │
+│ category                   │
+│ product_category           │
+│ sentiment_result (ENUM)    │
+│ created_at                 │
+│ updated_at                 │
+└────────────────────────────┘
 ```
 
 ### SQL Schema
 
 ```sql
--- Users tablosu
-CREATE TABLE users (
+-- Comments tablosu
+CREATE TABLE comments (
     id SERIAL PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    hashed_password VARCHAR(255) NOT NULL,
-    full_name VARCHAR(255),
-    is_active BOOLEAN DEFAULT TRUE NOT NULL,
-    is_superuser BOOLEAN DEFAULT FALSE NOT NULL,
+    content TEXT NOT NULL,
+    company VARCHAR(255) NOT NULL,
+    category VARCHAR(255) NOT NULL,
+    product_category VARCHAR(255) NOT NULL,
+    sentiment_result VARCHAR(50) NOT NULL,  -- 'POSITIVE' veya 'NEGATIVE'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
 );
 
-CREATE INDEX idx_users_email ON users(email);
-
--- Conversations tablosu
-CREATE TABLE conversations (
-    id VARCHAR(36) PRIMARY KEY,  -- UUID
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title VARCHAR(255),
-    summary TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
-    last_message_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
-);
-
-CREATE INDEX idx_conversations_user_id ON conversations(user_id);
+CREATE INDEX idx_comments_id ON comments(id);
 ```
 
 ---
@@ -877,25 +674,44 @@ CREATE INDEX idx_conversations_user_id ON conversations(user_id);
                              ▼
                     ┌─────────────────┐
                     │ add_user_message│
-                    │                 │
-                    │ User mesajını   │
-                    │ state'e ekle    │
                     └────────┬────────┘
                              │
                              ▼
                     ┌─────────────────┐
-                    │generate_response│
-                    │                 │
-                    │ OpenAI API ile  │
-                    │ yanıt üret      │
+                    │  route_question │
+                    │   (3-yönlü)     │
                     └────────┬────────┘
                              │
-                             ▼
+           ┌─────────────────┼─────────────────┐
+           │                 │                 │
+           ▼                 ▼                 ▼
+    ┌────────────┐    ┌────────────┐    ┌────────────┐
+    │  chitchat  │    │ sql_only   │    │sql_then_rag│
+    │  response  │    │            │    │            │
+    └─────┬──────┘    └─────┬──────┘    └─────┬──────┘
+          │                 │                 │
+          │           ┌─────▼──────┐    ┌─────▼──────┐
+          │           │generate_sql│    │generate_sql│
+          │           └─────┬──────┘    └─────┬──────┘
+          │                 │                 │
+          │           ┌─────▼──────┐    ┌─────▼──────┐
+          │           │ execute_sql│    │ execute_sql│
+          │           └─────┬──────┘    └─────┬──────┘
+          │                 │                 │
+          │           ┌─────▼──────┐    ┌─────▼──────┐
+          │           │ interpret  │    │ rag_search │
+          │           │ results    │    └─────┬──────┘
+          │           └─────┬──────┘          │
+          │                 │           ┌─────▼──────┐
+          │                 │           │  analyze   │
+          │                 │           │ rag_results│
+          │                 │           └─────┬──────┘
+          │                 │                 │
+          └────────────────┼─────────────────┘
+                           │
+                           ▼
                     ┌─────────────────┐
                     │  add_ai_message │
-                    │                 │
-                    │ AI yanıtını     │
-                    │ state'e ekle    │
                     └────────┬────────┘
                              │
                              ▼
@@ -904,59 +720,23 @@ CREATE INDEX idx_conversations_user_id ON conversations(user_id);
                     └─────────────────┘
 ```
 
-### State Akışı
-
-```
-Initial State:
-{
-    messages: [],
-    user_id: "1",
-    thread_id: "abc-123",
-    last_question: "Python nedir?",
-    last_answer: "",
-    context: null,
-    error: null
-}
-
-After add_user_message:
-{
-    messages: [HumanMessage("Python nedir?")],
-    ...
-}
-
-After generate_response:
-{
-    messages: [HumanMessage("Python nedir?")],
-    last_answer: "Python, yüksek seviyeli...",
-    ...
-}
-
-After add_ai_message:
-{
-    messages: [
-        HumanMessage("Python nedir?"),
-        AIMessage("Python, yüksek seviyeli...")
-    ],
-    last_answer: "Python, yüksek seviyeli...",
-    ...
-}
-```
-
-### Checkpointer ile Hafıza
+### Routing Mantığı
 
 ```python
-# Her thread_id için ayrı state
-config = {
-    "configurable": {
-        "thread_id": "conversation-uuid"
+# route_question node'u soruyu sınıflandırır
+def route_by_agent_type(state: AgentState) -> str:
+    return state.get("agent_type", "chitchat")
+
+# Conditional edges
+graph.add_conditional_edges(
+    "route_question",
+    route_by_agent_type,
+    {
+        "chitchat": "chitchat_response",
+        "sql_only": "generate_sql",
+        "sql_then_rag": "generate_sql"
     }
-}
-
-# Graph invoke
-result = graph.invoke(state, config)
-
-# State'i geri al
-saved_state = graph.get_state(config)
+)
 ```
 
 ---
@@ -969,31 +749,17 @@ saved_state = graph.get_state(config)
 ┌─────────┐       ┌─────────┐       ┌─────────┐
 │  Client │       │   API   │       │   DB    │
 └────┬────┘       └────┬────┘       └────┬────┘
-     │                 │                 │
      │ POST /login     │                 │
-     │ (email, pass)   │                 │
      │────────────────►│                 │
-     │                 │ get user by     │
-     │                 │ email           │
-     │                 │────────────────►│
-     │                 │◄────────────────│
-     │                 │                 │
      │                 │ verify_password │
-     │                 │ (bcrypt)        │
-     │                 │                 │
      │                 │ create_token    │
-     │                 │ (JWT)           │
-     │                 │                 │
      │◄────────────────│                 │
      │ {access_token}  │                 │
      │                 │                 │
      │ GET /chat       │                 │
-     │ Auth: Bearer    │                 │
+     │ Bearer <token>  │                 │
      │────────────────►│                 │
      │                 │ decode_token    │
-     │                 │ get_current_user│
-     │                 │────────────────►│
-     │                 │◄────────────────│
      │◄────────────────│                 │
      │ {response}      │                 │
 ```
@@ -1008,55 +774,16 @@ saved_state = graph.get_state(config)
 | User Isolation | Her conversation user_id ile izole |
 | CORS | Yapılandırılabilir origins |
 
-### Password Hashing
-
-```python
-# Hash oluşturma
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-hashed = pwd_context.hash("password123")
-
-# Doğrulama
-is_valid = pwd_context.verify("password123", hashed)
-```
-
 ---
 
 ## 🐳 Docker
 
-### Dockerfile
-
-```dockerfile
-FROM python:3.13-slim
-
-WORKDIR /app
-
-# Sistem bağımlılıkları
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Python bağımlılıkları
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-# Güvenlik: root olmayan kullanıcı
-RUN useradd -m appuser
-USER appuser
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
 ### Docker Compose Servisleri
-
-#### docker-compose.yml
 
 | Servis | Image | Port | Açıklama |
 |--------|-------|------|----------|
 | `db` | postgres:16-alpine | 5432 | PostgreSQL veritabanı |
-| `redis` | redis/redis-stack-server:latest | 6379 | Redis Stack (RedisSaver için RedisJSON) |
+| `redis` | redis/redis-stack-server:latest | 6379 | Redis Stack (Vector Store + Checkpointer) |
 | `web` | Build from Dockerfile | 8000 | FastAPI uygulaması |
 
 ### Komutlar
@@ -1074,6 +801,9 @@ docker compose logs -f
 # Veritabanını sıfırla (Redis dahil)
 docker compose down -v
 docker compose up -d
+
+# Sadece web servisini yeniden başlat
+docker compose restart web
 ```
 
 ---
@@ -1093,18 +823,20 @@ curl -X POST "http://localhost:8000/api/v1/auth/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=test@example.com&password=password123"
 
-# 3. Mesaj gönder
+# 3. SQL sorgusu (sayısal)
 curl -X POST "http://localhost:8000/api/v1/chat" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <YOUR_TOKEN>" \
-  -d '{"message": "Merhaba, nasılsın?"}'
+  -d '{"message": "Kaç olumsuz yorum var?"}'
 
-# 4. Konuşma listesi
-curl -X GET "http://localhost:8000/api/v1/chat/conversations" \
-  -H "Authorization: Bearer <YOUR_TOKEN>"
+# 4. RAG sorgusu (içerik analizi)
+curl -X POST "http://localhost:8000/api/v1/chat" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -d '{"message": "Kargo gecikmelerinden şikayet eden yorumları bul"}'
 
-# 5. Konuşma geçmişi
-curl -X GET "http://localhost:8000/api/v1/chat/conversations/<CONVERSATION_ID>" \
+# 5. Yorum listele
+curl -X GET "http://localhost:8000/api/v1/comments?limit=10&sentiment=NEGATIVE" \
   -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
@@ -1121,68 +853,23 @@ response = httpx.post(
     data={"username": "test@example.com", "password": "password123"}
 )
 token = response.json()["access_token"]
-
-# Chat
 headers = {"Authorization": f"Bearer {token}"}
+
+# SQL sorgusu
 response = httpx.post(
     f"{base_url}/chat",
     headers=headers,
-    json={"message": "Python hakkında bilgi ver"}
+    json={"message": "Nike'ın olumlu yorum sayısı kaç?"}
 )
 print(response.json())
-```
 
----
-
-## 📈 Genişletme Önerileri
-
-### 1. RAG Implementasyonu
-
-```python
-# nodes.py'ye eklenecek
-def retrieve_context(state: AgentState) -> dict:
-    """Vector store'dan ilgili dökümanları getir."""
-    query = state["last_question"]
-    
-    # Embedding oluştur
-    embeddings = OpenAIEmbeddings()
-    query_embedding = embeddings.embed_query(query)
-    
-    # Vector store'da ara
-    results = vector_store.similarity_search(query, k=3)
-    context = "\n".join([doc.page_content for doc in results])
-    
-    return {"context": context}
-```
-
-### 2. Streaming Response
-
-```python
-# Streaming endpoint
-@router.post("/chat/stream")
-async def stream_message(
-    request: ChatMessageRequest,
-    current_user: CurrentUser
-):
-    async def generate():
-        async for chunk in llm.astream(messages):
-            yield f"data: {chunk.content}\n\n"
-    
-    return StreamingResponse(generate(), media_type="text/event-stream")
-```
-
-### 3. Rate Limiting
-
-```python
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
-
-@router.post("/chat")
-@limiter.limit("60/minute")
-async def send_message(...):
-    ...
+# RAG sorgusu
+response = httpx.post(
+    f"{base_url}/chat",
+    headers=headers,
+    json={"message": "Ürün kalitesinden şikayet eden yorumları özetle"}
+)
+print(response.json())
 ```
 
 ---
@@ -1206,4 +893,3 @@ Bu proje MIT lisansı altında lisanslanmıştır.
 **Geliştirici**: RAG Chatbot Team  
 **Versiyon**: 1.0.0  
 **Son Güncelleme**: Aralık 2025
-
